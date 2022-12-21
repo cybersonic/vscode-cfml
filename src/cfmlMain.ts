@@ -1,14 +1,16 @@
-import * as Octokit from "@octokit/rest";
-import * as fs from "fs";
+import * as micromatch from "micromatch";
 import * as path from "path";
-import { commands, ConfigurationChangeEvent, ConfigurationTarget, DocumentSelector, ExtensionContext, extensions, FileSystemWatcher, IndentAction, languages, TextDocument, Uri, window, workspace, WorkspaceConfiguration } from "vscode";
+import {
+  commands, ConfigurationChangeEvent, ConfigurationTarget, DocumentSelector, ExtensionContext, extensions,
+  FileSystemWatcher, IndentAction, languages, TextDocument, Uri, window, workspace, WorkspaceConfiguration
+} from "vscode";
 import { COMPONENT_FILE_GLOB } from "./entities/component";
 import { Scope } from "./entities/scope";
 import { decreasingIndentingTags, goToMatchingTag, nonClosingTags, nonIndentingTags } from "./entities/tag";
 import { parseVariableAssignments, Variable } from "./entities/variable";
 import * as cachedEntity from "./features/cachedEntities";
 import CFMLDocumentColorProvider from "./features/colorProvider";
-import { foldAllFunctions, openActiveApplicationFile, refreshGlobalDefinitionCache, refreshWorkspaceDefinitionCache } from "./features/commands";
+import { foldAllFunctions, showApplicationDocument, refreshGlobalDefinitionCache, refreshWorkspaceDefinitionCache } from "./features/commands";
 import { CommentType, toggleComment } from "./features/comment";
 import CFMLCompletionItemProvider from "./features/completionItemProvider";
 import CFMLDefinitionProvider from "./features/definitionProvider";
@@ -34,9 +36,6 @@ const DOCUMENT_SELECTOR: DocumentSelector = [
     scheme: "untitled"
   }
 ];
-
-const octokit = new Octokit();
-const httpSuccessStatusCode: number = 200;
 
 export let extensionContext: ExtensionContext;
 
@@ -64,28 +63,26 @@ export function getConfigurationTarget(target: string): ConfigurationTarget {
 }
 
 /**
- * Gets the latest CommandBox Server schema from the CommandBox git repository
+ * Checks whether the given document should be excluded from being used.
+ * @param documentUri The URI of the document to check against
  */
-async function getLatestCommandBoxServerSchema(): Promise<void> {
-  const cmdboxServerSchemaFileName: string = "server.schema.json";
-  const cmdboxServerSchemaFilePath: string = path.join(extensionContext.extensionPath, "resources", "schemas", cmdboxServerSchemaFileName);
+function shouldExcludeDocument(documentUri: Uri): boolean {
+  const fileSettings: WorkspaceConfiguration = workspace.getConfiguration("files", documentUri);
 
-  try {
-    const cmdboxServerSchemaResult = await octokit.repos.getContents({
-      owner: "Ortus-Solutions",
-      repo: "commandbox",
-      path: `src/cfml/system/config/${cmdboxServerSchemaFileName}`,
-      ref: "master"
-    });
-
-    if (cmdboxServerSchemaResult && cmdboxServerSchemaResult.hasOwnProperty("status") && cmdboxServerSchemaResult.status === httpSuccessStatusCode && cmdboxServerSchemaResult.data.type === "file") {
-      const resultText: string = new Buffer(cmdboxServerSchemaResult.data.content, cmdboxServerSchemaResult.data.encoding).toString("utf8");
-
-      fs.writeFileSync(cmdboxServerSchemaFilePath, resultText);
+  const fileExcludes: {} = fileSettings.get<{}>("exclude", []);
+  let fileExcludeGlobs: string[] = [];
+  for (let fileExcludeGlob in fileExcludes) {
+    if (fileExcludes[fileExcludeGlob]) {
+      if (fileExcludeGlob.endsWith("/")) {
+        fileExcludeGlob += "**";
+      }
+      fileExcludeGlobs.push(fileExcludeGlob);
     }
-  } catch (err) {
-    console.error(err);
   }
+
+  const relativePath = workspace.asRelativePath(documentUri);
+
+  return micromatch.some(relativePath, fileExcludeGlobs);
 }
 
 /**
@@ -132,17 +129,15 @@ export function activate(context: ExtensionContext): void {
     ]
   });
 
-  getLatestCommandBoxServerSchema();
-
   context.subscriptions.push(commands.registerCommand("cfml.refreshGlobalDefinitionCache", refreshGlobalDefinitionCache));
   context.subscriptions.push(commands.registerCommand("cfml.refreshWorkspaceDefinitionCache", refreshWorkspaceDefinitionCache));
-  context.subscriptions.push(commands.registerCommand("cfml.toggleLineComment", toggleComment(CommentType.Line)));
-  context.subscriptions.push(commands.registerCommand("cfml.toggleBlockComment", toggleComment(CommentType.Block)));
-  context.subscriptions.push(commands.registerCommand("cfml.openActiveApplicationFile", openActiveApplicationFile));
-  context.subscriptions.push(commands.registerCommand("cfml.goToMatchingTag", goToMatchingTag));
-  context.subscriptions.push(commands.registerCommand("cfml.openCfDocs", CFDocsService.openCfDocsForCurrentWord));
-  context.subscriptions.push(commands.registerCommand("cfml.openEngineDocs", CFDocsService.openEngineDocsForCurrentWord));
-  context.subscriptions.push(commands.registerCommand("cfml.foldAllFunctions", foldAllFunctions));
+  context.subscriptions.push(commands.registerTextEditorCommand("cfml.toggleLineComment", toggleComment(CommentType.Line)));
+  context.subscriptions.push(commands.registerTextEditorCommand("cfml.toggleBlockComment", toggleComment(CommentType.Block)));
+  context.subscriptions.push(commands.registerTextEditorCommand("cfml.openActiveApplicationFile", showApplicationDocument));
+  context.subscriptions.push(commands.registerTextEditorCommand("cfml.goToMatchingTag", goToMatchingTag));
+  context.subscriptions.push(commands.registerTextEditorCommand("cfml.openCfDocs", CFDocsService.openCfDocsForCurrentWord));
+  context.subscriptions.push(commands.registerTextEditorCommand("cfml.openEngineDocs", CFDocsService.openEngineDocsForCurrentWord));
+  context.subscriptions.push(commands.registerTextEditorCommand("cfml.foldAllFunctions", foldAllFunctions));
 
   context.subscriptions.push(languages.registerHoverProvider(DOCUMENT_SELECTOR, new CFMLHoverProvider()));
   context.subscriptions.push(languages.registerDocumentSymbolProvider(DOCUMENT_SELECTOR, new CFMLDocumentSymbolProvider()));
@@ -156,6 +151,11 @@ export function activate(context: ExtensionContext): void {
   context.subscriptions.push(languages.registerColorProvider(DOCUMENT_SELECTOR, new CFMLDocumentColorProvider()));
 
   context.subscriptions.push(workspace.onDidSaveTextDocument((document: TextDocument) => {
+    const documentUri = document.uri;
+    if (shouldExcludeDocument(documentUri)) {
+      return;
+    }
+
     if (isCfcFile(document)) {
       cachedEntity.cacheComponentFromDocument(document);
     } else if (path.basename(document.fileName) === "Application.cfm") {
@@ -170,11 +170,19 @@ export function activate(context: ExtensionContext): void {
 
   const componentWatcher: FileSystemWatcher = workspace.createFileSystemWatcher(COMPONENT_FILE_GLOB, false, true, false);
   componentWatcher.onDidCreate((componentUri: Uri) => {
+    if (shouldExcludeDocument(componentUri)) {
+      return;
+    }
+
     workspace.openTextDocument(componentUri).then((document: TextDocument) => {
       cachedEntity.cacheComponentFromDocument(document);
     });
   });
   componentWatcher.onDidDelete((componentUri: Uri) => {
+    if (shouldExcludeDocument(componentUri)) {
+      return;
+    }
+
     cachedEntity.clearCachedComponent(componentUri);
 
     const fileName: string = path.basename(componentUri.fsPath);
@@ -187,6 +195,10 @@ export function activate(context: ExtensionContext): void {
   const applicationCfmWatcher: FileSystemWatcher = workspace.createFileSystemWatcher(APPLICATION_CFM_GLOB, false, true, false);
   context.subscriptions.push(applicationCfmWatcher);
   applicationCfmWatcher.onDidCreate((applicationUri: Uri) => {
+    if (shouldExcludeDocument(applicationUri)) {
+      return;
+    }
+
     workspace.openTextDocument(applicationUri).then((document: TextDocument) => {
       const documentStateContext: DocumentStateContext = getDocumentStateContext(document);
       const thisApplicationVariables: Variable[] = parseVariableAssignments(documentStateContext, documentStateContext.docIsScript);
@@ -197,6 +209,10 @@ export function activate(context: ExtensionContext): void {
     });
   });
   applicationCfmWatcher.onDidDelete((applicationUri: Uri) => {
+    if (shouldExcludeDocument(applicationUri)) {
+      return;
+    }
+
     cachedEntity.removeApplicationVariables(applicationUri);
   });
 
@@ -207,7 +223,8 @@ export function activate(context: ExtensionContext): void {
   }));
 
   const cfmlSettings: WorkspaceConfiguration = workspace.getConfiguration("cfml");
-  const autoCloseTagExt = extensions.getExtension("formulahendry.auto-close-tag");
+  const autoCloseTagExtId = "formulahendry.auto-close-tag";
+  const autoCloseTagExt = extensions.getExtension(autoCloseTagExtId);
   const enableAutoCloseTags: boolean = cfmlSettings.get<boolean>("autoCloseTags.enable", true);
   if (autoCloseTagExt) {
     const autoCloseTagsSettings: WorkspaceConfiguration = workspace.getConfiguration("auto-close-tag", null);
@@ -250,7 +267,7 @@ export function activate(context: ExtensionContext): void {
     window.showInformationMessage("You have the autoCloseTags setting enabled, but do not have the necessary extension installed/enabled.", "Install/Enable Extension", "Disable Setting").then(
       (selection: string) => {
         if (selection === "Install/Enable Extension") {
-          commands.executeCommand("extension.open", "formulahendry.auto-close-tag");
+          commands.executeCommand("extension.open", autoCloseTagExtId);
         } else if (selection === "Disable Setting") {
           cfmlSettings.update(
             "autoCloseTags.enable",

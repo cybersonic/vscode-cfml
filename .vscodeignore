@@ -1,9 +1,12 @@
 .sonarlint/**
+.github/**
+.history/**
 .vscode/**
 .vscode-test/**
 test/**
 src/**
 **/*.map
 .gitignore
+.markdownlint.json
 tsconfig.json
 tslint.json

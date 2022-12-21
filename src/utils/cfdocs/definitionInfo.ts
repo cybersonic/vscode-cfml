@@ -8,8 +8,6 @@ import { CFMLEngine, CFMLEngineName } from "./cfmlEngine";
 import { multiSigGlobalFunctions } from "./multiSignatures";
 import * as htmlEntities from "html-entities";
 
-const entities = new htmlEntities.AllHtmlEntities();
-
 export interface Param {
   name: string;
   type: string;
@@ -28,6 +26,7 @@ export interface EngineCompatibilityDetail {
 }
 
 export interface EngineInfo {
+  // expected to be CFMLEngineName
   [name: string]: EngineCompatibilityDetail;
 }
 
@@ -221,7 +220,7 @@ export class CFDocsDefinitionInfo {
           name: param.name,
           dataType: getParamDataType(param.type.toLowerCase()),
           required: param.required,
-          description: entities.decode(param.description),
+          description: htmlEntities.decode(param.description),
           default: param.default,
           enumeratedValues: param.values
         };
@@ -235,7 +234,7 @@ export class CFDocsDefinitionInfo {
     return {
       name: this.name,
       syntax: this.syntax,
-      description: (this.description ? entities.decode(this.description) : ""),
+      description: (this.description ? htmlEntities.decode(this.description) : ""),
       returntype: getReturnDataType(this.returns.toLowerCase()),
       signatures: signatures
     };
@@ -250,7 +249,7 @@ export class CFDocsDefinitionInfo {
         name: param.name,
         dataType: getParamDataType(param.type.toLowerCase()),
         required: param.required,
-        description: entities.decode(param.description),
+        description: htmlEntities.decode(param.description),
         default: param.default,
         enumeratedValues: param.values
       };
@@ -266,7 +265,7 @@ export class CFDocsDefinitionInfo {
       name: this.name,
       syntax: this.syntax,
       scriptSyntax: this.script,
-      description: entities.decode(this.description),
+      description: (this.description ? htmlEntities.decode(this.description) : ""),
       signatures: signatures,
       hasBody: true
     };

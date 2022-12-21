@@ -81,6 +81,7 @@ const nonClosingCfmlTags: string[] = [
   "cfrethrow",
   "cfreturn",
   "cfschedule",
+  "cfspreadsheet",
   "cfsearch",
   "cfset",
   "cfsetting",
@@ -153,6 +154,7 @@ export const nonIndentingTags: string[] = [
   "cfrethrow",
   "cfreturn",
   "cfschedule",
+  "cfspreadsheet",
   "cfsearch",
   "cfset",
   "cfsetting",
@@ -447,6 +449,9 @@ const componentPathAttributes: ComponentPathAttributes = {
   ],
 };
 
+/**
+ * Returns which attributes of which tags potentially contain component paths
+ */
 export function getComponentPathAttributes(): ComponentPathAttributes {
   return componentPathAttributes;
 }
@@ -849,13 +854,9 @@ export function getCfTags(documentStateContext: DocumentStateContext, isScript: 
 
 /**
  * Relocates cursor to the start of the tag matching the current selection
+ * @editor The text editor in which to find the matching tag
  */
-export async function goToMatchingTag(): Promise<void> {
-  if (!window.activeTextEditor) {
-    return;
-  }
-
-  const editor: TextEditor = window.activeTextEditor;
+export async function goToMatchingTag(editor: TextEditor): Promise<void> {
   const position: Position = editor.selection.active;
 
   const documentPositionStateContext: DocumentPositionStateContext = getDocumentPositionStateContext(editor.document, position);
